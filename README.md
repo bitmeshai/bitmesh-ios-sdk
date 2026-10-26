@@ -18,7 +18,7 @@ Or add to `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/bitmeshai/bitmesh-ios-sdk.git", from: "1.0.0"),
+    .package(url: "https://github.com/bitmeshai/bitmesh-ios-sdk.git", from: "1.1.0"),
 ],
 targets: [
     .target(name: "YourApp", dependencies: ["Bitmesh"]),
@@ -43,6 +43,69 @@ let response = try await client.chat(payload: [
 
 // Convenience helpers
 let text = try await client.chatContent("Tell me a joke")
+```
+
+## App Check (mobile keys)
+
+If your key ships inside your app, create it as a **Mobile app** key in the
+Bitmesh dashboard. The API then refuses any request on that key that doesn't
+carry a valid [Firebase App Check](https://firebase.google.com/docs/app-check)
+token, so a secret extracted from your app binary is useless on its own.
+Server keys don't need this; leave the parameter out.
+
+Set up App Check for your app in the Firebase console first (App Attest, plus a
+debug token for the simulator). The full walkthrough is in the
+[API docs](https://bitmesh.ai/docs#app-check). Then pass a token provider:
+
+```swift
+import Bitmesh
+import FirebaseAppCheck
+import FirebaseCore
+
+class AppAttestFactory: NSObject, AppCheckProviderFactory {
+    func createProvider(with app: FirebaseApp) -> AppCheckProvider? {
+        AppAttestProvider(app: app)
+    }
+}
+
+// Before FirebaseApp.configure(). Debug provider in debug builds ONLY.
+#if DEBUG
+AppCheck.setAppCheckProviderFactory(AppCheckDebugProviderFactory())
+#else
+AppCheck.setAppCheckProviderFactory(AppAttestFactory())
+#endif
+FirebaseApp.configure()
+
+let client = BitmeshClient(
+    key: consumerKey,
+    secret: consumerSecret,
+    appCheckTokenProvider: {
+        try await AppCheck.appCheck().token(forcingRefresh: false).token
+    }
+)
+```
+
+- The provider is called before **every** signed request. Firebase caches the
+  token and refreshes it before it expires, so this is cheap. Don't cache
+  tokens yourself.
+- The token goes in the `X-Firebase-AppCheck` header. It is not part of either
+  signature.
+- `getToolsResult(path:)` is unsigned and doesn't send it.
+- This package doesn't depend on Firebase: any closure returning a token works.
+
+Handling failures:
+
+```swift
+do {
+    let response = try await client.chat(payload: payload)
+} catch let error as BitmeshAppCheckTokenError {
+    // No token on the device, so nothing was sent. error.underlying holds the
+    // Firebase error. Usually App Check isn't set up for this app in Firebase.
+} catch let error as BitmeshError where error.appCheckRejectionReason != nil {
+    // 401: the API refused the token, e.g. "App Check token is for an
+    // unregistered app". error.isTemporaryAppCheckFailure is true only when the
+    // API couldn't verify tokens at all; retry later in that case.
+}
 ```
 
 ## API surface

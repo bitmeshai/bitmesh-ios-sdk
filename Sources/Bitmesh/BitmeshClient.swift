@@ -1,16 +1,30 @@
 import Foundation
 
+/// Returns a current Firebase App Check token, or `nil` if none is available.
+///
+/// Called before every signed request. Return the Firebase SDK's cached token;
+/// it refreshes itself:
+///
+/// ```swift
+/// appCheckTokenProvider: { try await AppCheck.appCheck().token(forcingRefresh: false).token }
+/// ```
+public typealias BitmeshAppCheckTokenProvider = @Sendable () async throws -> String?
+
 /// Client for the Bitmesh AI API (chat, image, video, transcription, and tools).
 ///
 /// All signed requests use OAuth 1.0 and `X-Payload-Signature` matching the PHP SDK.
 public final class BitmeshClient: @unchecked Sendable {
     public static let defaultBaseURL = "https://api.bitmesh.ai"
 
+    /// Header carrying the Firebase App Check token on mobile keys.
+    public static let appCheckHeader = "X-Firebase-AppCheck"
+
     private let key: String
     private let secret: String
     private let baseURL: URL
     private let timeoutSeconds: TimeInterval
     private let session: URLSession
+    private let appCheckTokenProvider: BitmeshAppCheckTokenProvider?
 
     /// Creates a client with OAuth credentials.
     /// - Parameters:
@@ -19,18 +33,24 @@ public final class BitmeshClient: @unchecked Sendable {
     ///   - timeoutSeconds: Request timeout (default 30)
     ///   - baseURL: API host (default `https://api.bitmesh.ai`)
     ///   - session: `URLSession` used for HTTP (default `.shared`)
+    ///   - appCheckTokenProvider: Supplies the Firebase App Check token sent as
+    ///     `X-Firebase-AppCheck`. Required when the key is a mobile key: the API
+    ///     refuses every request on one without a valid token. Leave `nil` for
+    ///     server keys. The token is not part of either signature.
     public init(
         key: String,
         secret: String,
         timeoutSeconds: TimeInterval = 30,
         baseURL: String = BitmeshClient.defaultBaseURL,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        appCheckTokenProvider: BitmeshAppCheckTokenProvider? = nil
     ) {
         self.key = key
         self.secret = secret
         self.baseURL = URL(string: baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")))!
         self.timeoutSeconds = timeoutSeconds
         self.session = session
+        self.appCheckTokenProvider = appCheckTokenProvider
     }
 
     // MARK: - Chat / Image / Video
@@ -141,7 +161,7 @@ public final class BitmeshClient: @unchecked Sendable {
         request.httpMethod = method
         request.httpBody = bodyData
         request.timeoutInterval = timeoutSeconds
-        try applySignedHeaders(to: &request, method: method, url: url.absoluteString, body: jsonBody, multipartFields: nil)
+        try await applySignedHeaders(to: &request, method: method, url: url.absoluteString, body: jsonBody, multipartFields: nil)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
@@ -155,7 +175,7 @@ public final class BitmeshClient: @unchecked Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.timeoutInterval = timeoutSeconds
-        try applySignedHeaders(to: &request, method: "GET", url: url.absoluteString, body: "", multipartFields: nil)
+        try await applySignedHeaders(to: &request, method: "GET", url: url.absoluteString, body: "", multipartFields: nil)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
         let data = try await performRequest(request)
@@ -192,7 +212,7 @@ public final class BitmeshClient: @unchecked Sendable {
         request.httpMethod = "POST"
         request.httpBody = bodyData
         request.timeoutInterval = timeoutSeconds
-        try applySignedHeaders(to: &request, method: "POST", url: url.absoluteString, body: nil, multipartFields: fields)
+        try await applySignedHeaders(to: &request, method: "POST", url: url.absoluteString, body: nil, multipartFields: fields)
         request.setValue(form.contentType, forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
@@ -206,7 +226,10 @@ public final class BitmeshClient: @unchecked Sendable {
         url: String,
         body: String?,
         multipartFields: BitmeshJSON?
-    ) throws {
+    ) async throws {
+        // Fetched first so the OAuth timestamp is taken as late as possible.
+        let appCheckToken = try await fetchAppCheckToken()
+
         let oauthParams = OAuthHelper.generateOAuthParams(
             method: method,
             url: url,
@@ -232,6 +255,29 @@ public final class BitmeshClient: @unchecked Sendable {
 
         request.setValue(OAuthHelper.buildAuthorizationHeader(oauthParams: oauthParams), forHTTPHeaderField: "Authorization")
         request.setValue(payloadSignature, forHTTPHeaderField: "X-Payload-Signature")
+        if let appCheckToken {
+            request.setValue(appCheckToken, forHTTPHeaderField: Self.appCheckHeader)
+        }
+    }
+
+    /// The App Check token for one request, or `nil` when no provider is set.
+    ///
+    /// A provider that fails stops the request here: without a token a mobile
+    /// key is refused anyway, so there is no point sending it.
+    private func fetchAppCheckToken() async throws -> String? {
+        guard let appCheckTokenProvider else { return nil }
+
+        let token: String?
+        do {
+            token = try await appCheckTokenProvider()
+        } catch {
+            throw BitmeshAppCheckTokenError(underlying: error)
+        }
+
+        guard let token, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw BitmeshAppCheckTokenError(underlying: nil)
+        }
+        return token
     }
 
     private func performRequest(_ request: URLRequest) async throws -> Data {
