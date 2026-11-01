@@ -40,7 +40,7 @@ final class BitmeshClientChatIntegrationTests: XCTestCase {
         let client = try BitmeshTestSupport.makeClient()
 
         let payload: BitmeshJSON = [
-            "model": "google/gemma-3n-e4b-it",
+            "model": "qwen/qwen3.5-9b",
             "messages": [
                 ["role": "system", "content": "You are a riddle solver."],
                 [

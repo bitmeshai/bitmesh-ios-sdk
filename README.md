@@ -121,9 +121,13 @@ do {
 | `toolsGeneralBackgroundRemoval(fields:imageFileURL:)` | `POST /tools/general/background-removal` | Background removal |
 | `toolsPortraitTryOnClothes(fields:files:)` | `POST /tools/portrait/try-on-clothes` | Virtual try-on |
 | `toolsQueryAsyncTaskResult(taskId:)` | `POST /tools/query-async-task-result` | Poll async tool task |
+| `imageAnimate(payload:)` | `POST /tools/video/image-animate` | Image-to-video (JSON, image base64-encoded) |
+| `getImageAnimate(taskId:query:)` | `GET /tools/video/image-animate/{task_id}` | Poll image-to-video job |
 | `getToolsResult(path:)` | `GET /tools-result/{path}` | Download tool result (unsigned) |
 
 Authentication matches the PHP SDK: OAuth 1.0 (HMAC-SHA1) plus `X-Payload-Signature` (SHA-256 of body + key + oauth signature).
+
+Multipart fields travel as text: the client sends `Bool` as `"1"`/`"0"` and numbers as strings, signs exactly what it sends, and leaves out `NSNull` values.
 
 ## Tests
 

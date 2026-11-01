@@ -8,7 +8,7 @@ final class BitmeshClientTranscribeIntegrationTests: XCTestCase {
 
         let response = try await client.transcribeFile(audioFileURL: audioURL, fields: [
             "speech_models": [
-                ["model": "gpt-4o-mini-transcribe"],
+                "universal-2",
             ],
         ])
 

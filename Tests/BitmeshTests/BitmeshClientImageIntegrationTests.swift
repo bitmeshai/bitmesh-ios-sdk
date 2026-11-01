@@ -7,7 +7,7 @@ final class BitmeshClientImageIntegrationTests: XCTestCase {
 
         let response = try await client.image(payload: [
             "prompt": "Make this cat smile",
-            "model": "wan-ai/wan2.6-image",
+            "model": "google/gemini-3-pro-image",
             "reference_images": [
                 "https://placecats.com/800/600",
             ],

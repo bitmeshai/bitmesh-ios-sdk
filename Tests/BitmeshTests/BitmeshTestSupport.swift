@@ -19,7 +19,10 @@ enum BitmeshTestSupport {
     }
 
     static func fixtureURL(_ filename: String) throws -> URL {
-        guard let url = Bundle.module.url(forResource: filename, withExtension: nil, subdirectory: "Fixtures") else {
+        // `.process` may flatten the Fixtures folder, depending on the platform.
+        guard let url = Bundle.module.url(forResource: filename, withExtension: nil, subdirectory: "Fixtures")
+            ?? Bundle.module.url(forResource: filename, withExtension: nil)
+        else {
             XCTFail("Missing fixture: \(filename)")
             throw NSError(domain: "BitmeshTests", code: 1)
         }

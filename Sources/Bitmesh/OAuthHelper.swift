@@ -90,7 +90,7 @@ enum OAuthHelper {
     }
 
     static func multipartPayloadSignature(fields: [String: Any], consumerKey: String, oauthSignature: String) throws -> String {
-        let json = try JSONHelpers.encodeTopLevelSortedJSONObject(fields)
+        let json = try JSONHelpers.multipartSigningJSON(fields)
         return sha256Hex(json + consumerKey + oauthSignature)
     }
 

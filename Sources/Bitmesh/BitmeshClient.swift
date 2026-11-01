@@ -141,6 +141,29 @@ public final class BitmeshClient: @unchecked Sendable {
         )
     }
 
+    /// `POST /tools/video/image-animate` — image-to-video. Async: returns
+    /// `data.task_id` straight away; poll with `getImageAnimate(taskId:)`.
+    ///
+    /// Payload keys: `model` (`animate-2.4-faster` or `animate-2.4-advanced`),
+    /// `image` (`["bytes_base64_encoded": data.base64EncodedString()]`),
+    /// `seconds` (1–10), and optional `prompt`, `aspect_ratio`, `callback_url`, `test`.
+    public func imageAnimate(payload: BitmeshJSON) async throws -> BitmeshJSON {
+        try await sendSignedJSONRequest(method: "POST", path: "/tools/video/image-animate", payload: payload)
+    }
+
+    /// `GET /tools/video/image-animate/{task_id}` — poll an image-to-video task.
+    /// `data.status` ends at `SUCCESS`, `FAILED` or `CANCELED`; on success the
+    /// video links are in `data.output_videos[].url`. Pass `["test": "1"]` as
+    /// `query` for a task created in test mode.
+    public func getImageAnimate(taskId: String, query: [String: String] = [:]) async throws -> BitmeshJSON {
+        let trimmed = taskId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw BitmeshError.validation("Image-animate task id is required.")
+        }
+        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? trimmed
+        return try await sendSignedGETRequest(path: "/tools/video/image-animate/\(encoded)", query: query)
+    }
+
     /// `GET /tools-result/{path}` — unsigned proxied asset fetch.
     public func getToolsResult(path: String) async throws -> Data {
         let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -199,9 +222,10 @@ public final class BitmeshClient: @unchecked Sendable {
     ) async throws -> BitmeshJSON {
         let url = buildURL(path: path)
         var form = MultipartFormData()
-        let flattened = MultipartFieldFlattener.flatten(fields)
-        for (name, value) in flattened.sorted(by: { $0.key < $1.key }) {
-            form.addField(name: name, value: value)
+        // Multipart carries text: send exactly the strings the signature covers.
+        let wireFields = MultipartFieldFlattener.wireFields(fields)
+        for field in MultipartFieldFlattener.flatten(wireFields) {
+            form.addField(name: field.name, value: field.value)
         }
         for file in files {
             form.addFile(name: file.name, filename: file.filename, mimeType: file.mimeType, data: file.data)
@@ -212,7 +236,7 @@ public final class BitmeshClient: @unchecked Sendable {
         request.httpMethod = "POST"
         request.httpBody = bodyData
         request.timeoutInterval = timeoutSeconds
-        try await applySignedHeaders(to: &request, method: "POST", url: url.absoluteString, body: nil, multipartFields: fields)
+        try await applySignedHeaders(to: &request, method: "POST", url: url.absoluteString, body: nil, multipartFields: wireFields)
         request.setValue(form.contentType, forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 

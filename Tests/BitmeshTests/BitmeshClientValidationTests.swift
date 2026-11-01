@@ -37,6 +37,17 @@ final class BitmeshClientValidationTests: XCTestCase {
         }
     }
 
+    func testGetImageAnimateRejectsEmptyTaskId() async {
+        do {
+            _ = try await client.getImageAnimate(taskId: "   ")
+            XCTFail("Expected validation error")
+        } catch let error as BitmeshError {
+            XCTAssertEqual(error.errorDescription, "Image-animate task id is required.")
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
     func testGetToolsResultRejectsEmptyPath() async {
         do {
             _ = try await client.getToolsResult(path: "")
