@@ -1,16 +1,20 @@
 # Bitmesh iOS SDK
 
-Swift package for calling the [Bitmesh AI API](https://bitmesh.ai) from iOS and macOS apps.
+Swift package for calling the [Bitmesh AI API](https://bitmesh.ai) **v2** from
+iOS and macOS apps: chat (streaming included), image, video, transcription,
+tools and the provider proxy.
+
+v2 takes one bearer key (`bmk_...`), so there is nothing to sign. From 2.0.0 on
+the SDK supports v2 only; use 1.2.0 for a v1 consumer key and secret. See
+[Moving from 1.x](#moving-from-1x).
 
 ## Requirements
 
 - iOS 15+ / macOS 12+
 - Swift 5.9+
-- OAuth consumer key and secret from Bitmesh
+- A v2 key from the Bitmesh dashboard, starting `bmk_`
 
 ## Installation
-
-### Swift Package Manager
 
 In Xcode: **File → Add Package Dependencies** → `https://github.com/bitmeshai/bitmesh-ios-sdk.git`
 
@@ -18,7 +22,7 @@ Or add to `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/bitmeshai/bitmesh-ios-sdk.git", from: "1.1.0"),
+    .package(url: "https://github.com/bitmeshai/bitmesh-ios-sdk.git", from: "2.0.0"),
 ],
 targets: [
     .target(name: "YourApp", dependencies: ["Bitmesh"]),
@@ -30,32 +34,54 @@ targets: [
 ```swift
 import Bitmesh
 
-let client = BitmeshClient(key: "your-consumer-key", secret: "your-consumer-secret")
+let client = BitmeshClient(apiKey: "bmk_...")
 
-// Chat (full payload / REST API)
+// Chat, full payload
 let response = try await client.chat(payload: [
-    "model": "openai/gpt-4o-mini",
+    "model": "bitmeshai/chat-now-nano",
     "messages": [
         ["role": "user", "content": "Hello from iOS"],
     ],
-    "max_tokens": 64,
+    "max_tokens": 300,
 ])
 
 // Convenience helpers
 let text = try await client.chatContent("Tell me a joke")
 ```
 
+Never hardcode the key in your app. Load it at runtime, from Remote Config or
+your own backend. A key that is empty or doesn't start with `bmk_` (a v1
+consumer key) is refused with `BitmeshError.validation` before anything is sent.
+
+## Streaming
+
+```swift
+var reply = ""
+for try await chunk in client.streamChat(messages: [.user("Write a haiku")]) {
+    reply += chunk.text                 // new text, "" on bookkeeping chunks
+    if let usage = chunk.usage { print(usage.totalTokens ?? 0) } // last chunk
+}
+
+// Raw chunks, in OpenAI's format
+for try await json in client.chatStream(payload: payload) { ... }
+```
+
+The request is billed once, when the stream ends. Stop iterating, or cancel the
+task, to stop generating: you pay only for what was written. Errors before the
+stream starts throw `BitmeshError.httpError`; a provider failure mid-stream
+throws one with status `502`.
+
 ## App Check (mobile keys)
 
-If your key ships inside your app, create it as a **Mobile app** key in the
+If your key ships inside your app, create it as a **mobile app** key in the
 Bitmesh dashboard. The API then refuses any request on that key that doesn't
 carry a valid [Firebase App Check](https://firebase.google.com/docs/app-check)
-token, so a secret extracted from your app binary is useless on its own.
+token, so a key extracted from your app binary is useless on its own.
 Server keys don't need this; leave the parameter out.
 
-Set up App Check for your app in the Firebase console first (App Attest, plus a
-debug token for the simulator). The full walkthrough is in the
-[API docs](https://bitmesh.ai/docs#app-check). Then pass a token provider:
+Set up App Check for your app in the Firebase console first (App Attest). The
+full walkthrough is in the [API docs](https://bitmesh.ai/docs#app-check). Then
+pass a token provider:
 
 ```swift
 import Bitmesh
@@ -68,32 +94,43 @@ class AppAttestFactory: NSObject, AppCheckProviderFactory {
     }
 }
 
-// Before FirebaseApp.configure(). Debug provider in debug builds ONLY.
-#if DEBUG
-AppCheck.setAppCheckProviderFactory(AppCheckDebugProviderFactory())
-#else
+// Before FirebaseApp.configure().
 AppCheck.setAppCheckProviderFactory(AppAttestFactory())
-#endif
 FirebaseApp.configure()
 
 let client = BitmeshClient(
-    key: consumerKey,
-    secret: consumerSecret,
+    apiKey: bitmeshKey,
     appCheckTokenProvider: {
         try await AppCheck.appCheck().token(forcingRefresh: false).token
     }
 )
 ```
 
-- The provider is called before **every** signed request. Firebase caches the
-  token and refreshes it before it expires, so this is cheap. Don't cache
-  tokens yourself.
-- The token goes in the `X-Firebase-AppCheck` header. It is not part of either
-  signature.
-- `getToolsResult(path:)` is unsigned and doesn't send it.
+- The provider is called before **every** request. Firebase caches the token
+  and refreshes it before it expires, so this is cheap. Don't cache tokens
+  yourself.
+- The token goes in the `X-Firebase-AppCheck` header.
+- `getToolsResult(path:)` is public and sends neither the key nor the token.
 - This package doesn't depend on Firebase: any closure returning a token works.
 
-Handling failures:
+### Debug tokens
+
+On the simulator, or before Firebase is set up, a Bitmesh debug token
+(`bmdbg_...`, created on the key in the dashboard) can stand in for App Check.
+It goes in `X-Bitmesh-Debug-Token`, and the token provider isn't called. Keep it
+out of release builds:
+
+```swift
+#if DEBUG
+let debugToken: String? = ProcessInfo.processInfo.environment["BITMESH_DEBUG_TOKEN"]
+#else
+let debugToken: String? = nil
+#endif
+
+let client = BitmeshClient(apiKey: bitmeshKey, appCheckTokenProvider: tokenProvider, debugToken: debugToken)
+```
+
+### Handling failures
 
 ```swift
 do {
@@ -102,17 +139,53 @@ do {
     // No token on the device, so nothing was sent. error.underlying holds the
     // Firebase error. Usually App Check isn't set up for this app in Firebase.
 } catch let error as BitmeshError where error.appCheckRejectionReason != nil {
-    // 401: the API refused the token, e.g. "App Check token is for an
-    // unregistered app". error.isTemporaryAppCheckFailure is true only when the
-    // API couldn't verify tokens at all; retry later in that case.
+    // 401: the API refused the token or debug token, e.g. "App Check token is
+    // for an unregistered app". error.isTemporaryAppCheckFailure is true only
+    // when the API couldn't verify tokens at all; retry later in that case.
+} catch let error as BitmeshError {
+    // error.statusCode (401, 402, 429, ...) and error.apiMessage, the API's reason
+}
+```
+
+## Proxy
+
+With a proxy key, send the provider's own request, minus its API key header:
+Bitmesh adds your stored provider key. Bodies and replies pass through unchanged.
+
+```swift
+let proxy = BitmeshClient(apiKey: proxyKey)
+
+let reply = try await proxy.proxy(provider: "openai", path: "v1/chat/completions", payload: [
+    "model": "gpt-4o-mini",
+    "messages": [["role": "user", "content": "Hello"]],
+])
+
+// Provider headers that select options are passed on
+let message = try await proxy.proxy(
+    provider: "anthropic",
+    path: "v1/messages",
+    payload: ["model": "claude-sonnet-4-5", "max_tokens": 256, "messages": messages],
+    headers: ["anthropic-version": "2023-06-01"]
+)
+
+// Streaming: the provider's server-sent events, as they arrive
+for try await event in proxy.proxyStream(provider: "openai", path: "v1/chat/completions", payload: body) {
+    if event.isDone { break }
+    let chunk = try event.json()
 }
 ```
 
 ## API surface
 
+All paths are under `/v2`.
+
 | Method | HTTP | Description |
 |--------|------|-------------|
-| `chat(payload:)` | `POST /chat` | Chat completions |
+| `balance()` | `GET /balance` | Credit balance |
+| `verify()` | `GET /test` | Throws unless the key (and App Check token) is accepted |
+| `chat(payload:)` | `POST /chat` | Chat completion |
+| `chatStream(payload:)` | `POST /chat`, `"stream": true` | Streamed chat, raw chunks |
+| `streamChat(messages:model:extraPayload:)` | `POST /chat`, `"stream": true` | Streamed chat, typed chunks |
 | `image(payload:)` | `POST /image` | Image generation |
 | `video(payload:)` | `POST /video` | Video generation |
 | `getVideo(id:query:)` | `GET /video/{id}` | Poll video job |
@@ -123,32 +196,55 @@ do {
 | `toolsQueryAsyncTaskResult(taskId:)` | `POST /tools/query-async-task-result` | Poll async tool task |
 | `imageAnimate(payload:)` | `POST /tools/video/image-animate` | Image-to-video (JSON, image base64-encoded) |
 | `getImageAnimate(taskId:query:)` | `GET /tools/video/image-animate/{task_id}` | Poll image-to-video job |
-| `getToolsResult(path:)` | `GET /tools-result/{path}` | Download tool result (unsigned) |
+| `proxy(provider:path:method:payload:headers:)` | `/proxy/{provider}/{path}` | Proxy request (proxy keys) |
+| `proxyStream(provider:path:payload:headers:)` | `POST /proxy/{provider}/{path}` | Streamed proxy request |
+| `getToolsResult(path:)` | `GET /tools-result/{path}` (no `/v2`) | Download a tool result; public |
 
-Authentication matches the PHP SDK: OAuth 1.0 (HMAC-SHA1) plus `X-Payload-Signature` (SHA-256 of body + key + oauth signature).
+Replies use OpenAI's snake_case field names for every model (`usage.prompt_tokens`, `choices[].finish_reason`).
 
-Multipart fields travel as text: the client sends `Bool` as `"1"`/`"0"` and numbers as strings, signs exactly what it sends, and leaves out `NSNull` values.
+Multipart fields travel as text: the client sends `Bool` as `"1"`/`"0"` and numbers as strings, and leaves out `NSNull` values.
+
+## Moving from 1.x
+
+```swift
+// 1.x, API v1
+let client = BitmeshClient(key: consumerKey, secret: consumerSecret)
+
+// 2.0, API v2
+let client = BitmeshClient(apiKey: "bmk_...")
+```
+
+- Create a v2 key in the dashboard. A v1 key is refused on v2 and the other way round.
+- Method names and payloads are unchanged.
+- OAuth signing and `X-Payload-Signature` are gone. Replies are always snake_case:
+  read `usage.prompt_tokens`, not `usage.promptTokens`.
+- New: `balance()`, `verify()`, `chatStream`, `streamChat`, `proxy`, `proxyStream`,
+  `debugToken`, `ChatResponse.usage`, `BitmeshError.statusCode` and `apiMessage`.
+- `defaultChatModel` is now `bitmeshai/chat-now-nano`.
 
 ## Tests
 
-From the package root:
-
 ```bash
 swift test
 ```
 
-- **Validation & OAuth tests** always run (no credentials).
-- **Integration tests** call `https://api.bitmesh.ai` and are skipped unless you set:
+- Unit tests always run, against a mocked `URLSession`.
+- Integration tests call the live API and are skipped unless you set a v2 hosted key:
 
 ```bash
-export BITMESH_TEST_CONSUMER_KEY="your-oauth-consumer-key"
-export BITMESH_TEST_CONSUMER_SECRET="your-oauth-consumer-secret"
+export BITMESH_TEST_API_KEY="bmk_..."
+export BITMESH_TEST_BASE_URL="https://api.bitmesh.ai"   # optional
+export BITMESH_TEST_MODEL="bitmeshai/chat-now-nano"     # optional, for streaming
 swift test
 ```
+
+The package also builds on Linux (swift-corelibs-foundation), where a streamed
+reply is read whole and then parsed rather than piece by piece.
 
 ## Example app
 
-Open `BitmeshExample/BitmeshExample.xcodeproj` in Xcode and add the local `Bitmesh` package to the app target.
+Open `BitmeshExample/BitmeshExample.xcodeproj` in Xcode, add the local `Bitmesh`
+package to the app target, and set `BITMESH_KEY` in the target's Info.plist.
 
 ## License
 

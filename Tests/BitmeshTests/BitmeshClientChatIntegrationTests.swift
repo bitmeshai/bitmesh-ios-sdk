@@ -61,4 +61,27 @@ final class BitmeshClientChatIntegrationTests: XCTestCase {
         XCTAssertFalse(response.isEmpty)
         XCTAssertFalse((response["id"] as? String ?? "").isEmpty)
     }
+
+    func testStreamChatCallsAPI() async throws {
+        let client = try BitmeshTestSupport.makeClient()
+        let model = ProcessInfo.processInfo.environment["BITMESH_TEST_MODEL"] ?? BitmeshClient.defaultChatModel
+
+        var text = ""
+        var usage: ChatUsage?
+        for try await chunk in client.streamChat(messages: [.user("Count from 1 to 5.")], model: model, extraPayload: ["max_tokens": 300]) {
+            text += chunk.text
+            usage = chunk.usage ?? usage
+        }
+
+        XCTAssertFalse(text.isEmpty)
+        XCTAssertGreaterThan(usage?.totalTokens ?? 0, 0)
+    }
+
+    func testBalanceAndVerify() async throws {
+        let client = try BitmeshTestSupport.makeClient()
+
+        try await client.verify()
+        let balance = try await client.balance()
+        XCTAssertGreaterThanOrEqual(balance, 0)
+    }
 }
