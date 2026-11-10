@@ -19,7 +19,7 @@ public enum BitmeshError: Error, LocalizedError, Sendable {
         case .invalidResponse:
             return "Invalid HTTP response"
         case .httpError(let code, let body):
-            return "Bitmesh API request failed with status \(code): \(body ?? "")"
+            return "Bitmesh API request failed with status \(code): \(apiMessage ?? body ?? "")"
         case .networkError(let error):
             return "Bitmesh request failed: \(error.localizedDescription)"
         case .invalidJSON:
@@ -34,7 +34,8 @@ public enum BitmeshError: Error, LocalizedError, Sendable {
 /// so the request was not sent.
 ///
 /// On a device this usually means App Check is not set up for the app in the
-/// Firebase console (App Attest registration, or a debug token for simulators).
+/// Firebase console (App Attest registration). On a simulator, pass the
+/// client a Bitmesh `debugToken` instead.
 public struct BitmeshAppCheckTokenError: Error, LocalizedError {
     /// The error thrown by the provider, or `nil` when it returned no token.
     public let underlying: Error?
@@ -52,17 +53,36 @@ public struct BitmeshAppCheckTokenError: Error, LocalizedError {
 }
 
 extension BitmeshError {
-    /// The API's reason when it refused the request's App Check token, such as
-    /// `App Check token is for an unregistered app`. `nil` for any other error.
-    ///
-    /// The API answers these with `401` and `{"error": "<reason>"}` on keys
-    /// designated as mobile.
-    public var appCheckRejectionReason: String? {
-        guard case .httpError(401, let body) = self,
+    /// The HTTP status of an error response, or `nil` for any other error.
+    public var statusCode: Int? {
+        guard case .httpError(let code, _) = self else { return nil }
+        return code
+    }
+
+    /// The API's reason for an error response: its `message`, or its `error`
+    /// when that is a string, or `error.message` for a provider's error object.
+    public var apiMessage: String? {
+        guard case .httpError(_, let body) = self,
               let data = body?.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let reason = object["error"] as? String,
-              reason.contains("App Check") || reason.contains(BitmeshClient.appCheckHeader)
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return nil
+        }
+        if let message = object["message"] as? String, !message.isEmpty { return message }
+        if let error = object["error"] as? String { return error }
+        return (object["error"] as? [String: Any])?["message"] as? String
+    }
+
+    /// The API's reason when it refused the request's App Check token or debug
+    /// token, such as `App Check token is for an unregistered app` or
+    /// `Debug token has expired`. `nil` for any other error.
+    ///
+    /// The API answers these with `401` and `{"error": "<reason>"}` on mobile keys.
+    public var appCheckRejectionReason: String? {
+        guard statusCode == 401, let reason = apiMessage,
+              reason.contains("App Check")
+                || reason.contains(BitmeshClient.appCheckHeader)
+                || reason.lowercased().contains("debug token")
         else {
             return nil
         }

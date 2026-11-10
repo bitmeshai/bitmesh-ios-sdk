@@ -1,13 +1,13 @@
 import XCTest
 @testable import Bitmesh
 
-/// Tools in test mode: the full signed round trip, without running a tool or
+/// Tools in test mode: the full round trip, without running a tool or
 /// spending credits.
 final class BitmeshClientToolsIntegrationTests: XCTestCase {
     func testBackgroundRemovalInTestMode() async throws {
         let client = try BitmeshTestSupport.makeClient()
 
-        // A Swift Bool is sent as "1": the value the payload signature covers.
+        // A Swift Bool is sent as "1".
         let response = try await client.toolsGeneralBackgroundRemoval(
             fields: ["test": true, "return_form": "crop"],
             imageFileURL: try BitmeshTestSupport.fixtureURL("stool.png")

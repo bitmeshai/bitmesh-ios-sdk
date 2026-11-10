@@ -3,19 +3,20 @@ import XCTest
 @testable import Bitmesh
 
 enum BitmeshTestSupport {
-    static var consumerKey: String {
-        ProcessInfo.processInfo.environment["BITMESH_TEST_CONSUMER_KEY"] ?? ""
+    static var apiKey: String {
+        ProcessInfo.processInfo.environment["BITMESH_TEST_API_KEY"] ?? ""
     }
 
-    static var consumerSecret: String {
-        ProcessInfo.processInfo.environment["BITMESH_TEST_CONSUMER_SECRET"] ?? ""
+    static var baseURL: String {
+        ProcessInfo.processInfo.environment["BITMESH_TEST_BASE_URL"] ?? BitmeshClient.defaultBaseURL
     }
 
+    /// A client for the live API, with a v2 hosted key.
     static func makeClient(timeout: TimeInterval = 120) throws -> BitmeshClient {
-        guard !consumerKey.isEmpty, !consumerSecret.isEmpty else {
-            throw XCTSkip("Set BITMESH_TEST_CONSUMER_KEY and BITMESH_TEST_CONSUMER_SECRET to run integration tests.")
+        guard !apiKey.isEmpty else {
+            throw XCTSkip("Set BITMESH_TEST_API_KEY (a v2 hosted key, bmk_...) to run integration tests.")
         }
-        return BitmeshClient(key: consumerKey, secret: consumerSecret, timeoutSeconds: timeout)
+        return BitmeshClient(apiKey: apiKey, timeoutSeconds: timeout, baseURL: baseURL)
     }
 
     static func fixtureURL(_ filename: String) throws -> URL {

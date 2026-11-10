@@ -20,7 +20,7 @@ final class TogetherAPIClient {
         var errorDescription: String? {
             switch self {
             case .missingCredentials:
-                return "Missing CONSUMER_KEY / CONSUMER_SECRET in Info.plist."
+                return "Missing BITMESH_KEY in Info.plist."
             case .invalidResponse:
                 return "Could not read content from the AI response."
             case .server(let message):
@@ -32,9 +32,9 @@ final class TogetherAPIClient {
     private let session: URLSession
     private let client: BitmeshClient
     
-    // ✅ DeepSeek V3 on Together
-    private let storyModel = "openai/gpt-4o-mini"
-    private let paraphraseModel = "openai/gpt-4o-mini"
+    // Models used for each feature
+    private let storyModel = BitmeshClient.defaultChatModel
+    private let paraphraseModel = BitmeshClient.defaultChatModel
     
     init() {
             let config = URLSessionConfiguration.default
@@ -51,17 +51,14 @@ final class TogetherAPIClient {
             // IMPORTANT:
             // BitmeshClient must use THIS session, otherwise these timeouts do nothing.
             self.client = BitmeshClient(
-                consumerKey: Bundle.main.infoDictionary?["CONSUMER_KEY"] as? String ?? "",
-                consumerSecret: Bundle.main.infoDictionary?["CONSUMER_SECRET"] as? String ?? "",
-                session: self.session // <-- add this to BitmeshClient
+                apiKey: Bundle.main.infoDictionary?["BITMESH_KEY"] as? String ?? "",
+                session: self.session
             )
         }
     
     private func ensureCredentials() throws {
-        let ck = Bundle.main.infoDictionary?["CONSUMER_KEY"] as? String
-        let cs = Bundle.main.infoDictionary?["CONSUMER_SECRET"] as? String
-        if (ck ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-            (cs ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        let key = Bundle.main.infoDictionary?["BITMESH_KEY"] as? String
+        if (key ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw APIError.missingCredentials
         }
     }

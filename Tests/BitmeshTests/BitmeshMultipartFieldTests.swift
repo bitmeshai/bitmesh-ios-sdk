@@ -1,9 +1,9 @@
 import XCTest
 @testable import Bitmesh
 
-/// Multipart uploads are signed over the JSON of the non-file fields as the
-/// server receives them: text values, trimmed, empty strings as null, keys sorted.
-final class BitmeshMultipartSigningTests: XCTestCase {
+/// Multipart fields travel as text: booleans as "1"/"0", numbers as their
+/// string form, nils and empty collections left out.
+final class BitmeshMultipartFieldTests: XCTestCase {
     func testValuesAreSentAsText() {
         let wire = MultipartFieldFlattener.wireFields([
             "restore_face": true,
@@ -32,25 +32,5 @@ final class BitmeshMultipartSigningTests: XCTestCase {
             "alpha[a]", "alpha[b]", "speech_models[0]", "speech_models[1]", "zeta",
         ])
         XCTAssertEqual(fields.map(\.value), ["1", "2", "universal-3-pro", "universal-2", "z"])
-    }
-
-    func testSigningJSONMatchesWhatTheServerHashes() throws {
-        let json = try JSONHelpers.multipartSigningJSON([
-            "test": true,
-            "resolution": 1024,
-            "return_form": " crop ",
-            "blank": "",
-            "speech_models": ["universal-2"],
-        ])
-
-        XCTAssertEqual(
-            json,
-            #"{"blank":null,"resolution":"1024","return_form":"crop","speech_models":["universal-2"],"test":"1"}"#
-        )
-    }
-
-    func testNoFieldsSignsAnEmptyJSONArray() throws {
-        XCTAssertEqual(try JSONHelpers.multipartSigningJSON([:]), "[]")
-        XCTAssertEqual(try JSONHelpers.multipartSigningJSON(["gone": NSNull()]), "[]")
     }
 }

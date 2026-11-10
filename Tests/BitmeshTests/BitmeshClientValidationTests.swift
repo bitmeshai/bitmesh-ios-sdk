@@ -2,7 +2,7 @@ import XCTest
 @testable import Bitmesh
 
 final class BitmeshClientValidationTests: XCTestCase {
-    private let client = BitmeshClient(key: "key", secret: "secret")
+    private let client = BitmeshClient(apiKey: "bmk_test0123456789")
 
     func testGetTranscribeRecordedRejectsEmptyId() async {
         do {

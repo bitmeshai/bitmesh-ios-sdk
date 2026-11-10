@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import XCTest
 @testable import Bitmesh
 
@@ -12,6 +15,22 @@ final class MockURLProtocol: URLProtocol {
     static var requests: [URLRequest] {
         lock.lock(); defer { lock.unlock() }
         return _requests
+    }
+
+    /// The body a request carried. URLProtocol sees bodies as streams.
+    static func body(of request: URLRequest) -> Data {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return Data() }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let read = stream.read(&buffer, maxLength: buffer.count)
+            if read <= 0 { break }
+            data.append(buffer, count: read)
+        }
+        return data
     }
 
     static func reset(status: Int = 200, body: String = "{\"ok\":true}") {
@@ -54,14 +73,15 @@ final class BitmeshAppCheckTests: XCTestCase {
         MockURLProtocol.reset()
     }
 
-    private func makeClient(appCheckTokenProvider: BitmeshAppCheckTokenProvider? = nil) -> BitmeshClient {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [MockURLProtocol.self]
-        return BitmeshClient(
-            key: "key",
-            secret: "secret",
-            session: URLSession(configuration: configuration),
-            appCheckTokenProvider: appCheckTokenProvider
+    private func makeClient(
+        appCheckTokenProvider: BitmeshAppCheckTokenProvider? = nil,
+        debugToken: String? = nil
+    ) -> BitmeshClient {
+        BitmeshClient(
+            apiKey: "bmk_test0123456789",
+            session: .mocked,
+            appCheckTokenProvider: appCheckTokenProvider,
+            debugToken: debugToken
         )
     }
 
@@ -73,7 +93,7 @@ final class BitmeshAppCheckTests: XCTestCase {
 
     // MARK: - Sending the token
 
-    func testTokenIsSentOnSignedJSONGETAndMultipartRequests() async throws {
+    func testTokenIsSentOnJSONGETAndMultipartRequests() async throws {
         let client = makeClient(appCheckTokenProvider: { "token-1" })
 
         _ = try await client.chat(payload: ["model": "m", "messages": []])
@@ -84,8 +104,7 @@ final class BitmeshAppCheckTests: XCTestCase {
         XCTAssertEqual(requests.count, 3)
         for request in requests {
             XCTAssertEqual(request.value(forHTTPHeaderField: "X-Firebase-AppCheck"), "token-1", "\(request.url!.path)")
-            XCTAssertTrue(request.value(forHTTPHeaderField: "Authorization")?.hasPrefix("OAuth ") ?? false)
-            XCTAssertNotNil(request.value(forHTTPHeaderField: "X-Payload-Signature"))
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer bmk_test0123456789")
         }
     }
 
@@ -110,13 +129,38 @@ final class BitmeshAppCheckTests: XCTestCase {
         XCTAssertNil(MockURLProtocol.requests.first?.value(forHTTPHeaderField: "X-Firebase-AppCheck"))
     }
 
-    func testUnsignedResultDownloadsDoNotSendTheToken() async throws {
+    func testPublicResultDownloadsSendNoKeyOrToken() async throws {
         let client = makeClient(appCheckTokenProvider: { "token-1" })
 
         _ = try await client.getToolsResult(path: "2026-10-26/result.png")
 
         XCTAssertNil(MockURLProtocol.requests.first?.value(forHTTPHeaderField: "X-Firebase-AppCheck"))
         XCTAssertNil(MockURLProtocol.requests.first?.value(forHTTPHeaderField: "Authorization"))
+    }
+
+    // MARK: - Debug tokens
+
+    func testDebugTokenIsSentInPlaceOfAppCheck() async throws {
+        let counter = Counter()
+        let client = makeClient(
+            appCheckTokenProvider: { _ = await counter.next(); throw ProviderFailure() },
+            debugToken: "bmdbg_abc"
+        )
+
+        _ = try await client.chat(payload: [:])
+
+        let request = try XCTUnwrap(MockURLProtocol.requests.first)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "X-Bitmesh-Debug-Token"), "bmdbg_abc")
+        XCTAssertNil(request.value(forHTTPHeaderField: "X-Firebase-AppCheck"))
+        let calls = await counter.next()
+        XCTAssertEqual(calls, 1, "the provider is not called when a debug token is set")
+    }
+
+    func testDebugTokenRejectionsExposeTheReason() {
+        for reason in ["Invalid debug token", "Debug token has expired", "Debug token has reached its limit of 50 requests today (UTC)"] {
+            let error = BitmeshError.httpError(statusCode: 401, body: "{\"error\":\"\(reason)\"}")
+            XCTAssertEqual(error.appCheckRejectionReason, reason)
+        }
     }
 
     // MARK: - Provider failures
@@ -187,7 +231,7 @@ final class BitmeshAppCheckTests: XCTestCase {
     }
 
     func testOtherErrorsHaveNoAppCheckReason() {
-        XCTAssertNil(BitmeshError.httpError(statusCode: 401, body: "{\"error\":\"Invalid signature\"}").appCheckRejectionReason)
+        XCTAssertNil(BitmeshError.httpError(statusCode: 401, body: "{\"error\":\"Invalid API key\"}").appCheckRejectionReason)
         XCTAssertNil(BitmeshError.httpError(statusCode: 500, body: "{\"error\":\"App Check token has expired\"}").appCheckRejectionReason)
         XCTAssertNil(BitmeshError.httpError(statusCode: 401, body: "not json").appCheckRejectionReason)
         XCTAssertNil(BitmeshError.invalidJSON.appCheckRejectionReason)
@@ -200,5 +244,14 @@ private actor Counter {
     func next() -> Int {
         value += 1
         return value
+    }
+}
+
+extension URLSession {
+    /// A session whose requests are answered by `MockURLProtocol`.
+    static var mocked: URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        return URLSession(configuration: configuration)
     }
 }
