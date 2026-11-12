@@ -1,8 +1,8 @@
 # Bitmesh iOS SDK
 
 Swift package for calling the [Bitmesh AI API](https://bitmesh.ai) **v2** from
-iOS and macOS apps: chat (streaming included), image, video, transcription,
-tools and the provider proxy.
+iOS and macOS apps: chat (streaming included), image, video, transcription
+(real-time included), tools and the provider proxy.
 
 v2 takes one bearer key (`bmk_...`), so there is nothing to sign. From 2.0.0 on
 the SDK supports v2 only; use 1.2.0 for a v1 consumer key and secret. See
@@ -22,7 +22,7 @@ Or add to `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/bitmeshai/bitmesh-ios-sdk.git", from: "2.0.0"),
+    .package(url: "https://github.com/bitmeshai/bitmesh-ios-sdk.git", from: "2.1.0"),
 ],
 targets: [
     .target(name: "YourApp", dependencies: ["Bitmesh"]),
@@ -175,6 +175,49 @@ for try await event in proxy.proxyStream(provider: "openai", path: "v1/chat/comp
 }
 ```
 
+## Real-time transcription
+
+Stream audio as it is recorded and get the transcript turn by turn, over a
+WebSocket to `/v2/transcribe-realtime`.
+
+```swift
+let session = try await client.transcribeRealtime(
+    sampleRate: 16000,
+    speechModel: BitmeshRealtimeSpeechModel.universal36Pro // the default
+)
+
+Task {
+    for try await event in session.events {
+        // The same turn arrives again as it grows; keep the final one.
+        if case .turn(let turn) = event, turn.endOfTurn { print(turn.transcript) }
+    }
+}
+
+// From AVAudioEngine: raw 16-bit little-endian mono PCM, about 50 ms
+// (1,600 bytes at 16 kHz) at a time
+try await session.sendAudio(pcmChunk)
+
+let end = await session.terminate()
+print("\(end?.sessionDurationSeconds ?? 0) s billed")
+```
+
+- A refused connection throws `BitmeshError.httpError` before any audio is
+  sent: `402` when the balance covers less than a minute, `429` when the key
+  already has 5 sessions open, `422` for unknown settings. A WebSocket handshake
+  has no readable body, so `apiMessage` is `nil` here.
+- `session.events` ends when the session closes, throwing
+  `BitmeshRealtimeClosedError` for a close other than a normal one: `3008` at
+  the time limit (an hour, or what the balance covers), `1001` when the server
+  restarts, `1011` when the transcription service fails.
+- The session is billed per second it is open, silence included: call
+  `terminate()` as soon as you are done.
+- Models: `universal-3-6-pro` (32 languages), `universal-streaming-english`,
+  `universal-streaming-multilingual`. `formatTurns: true` punctuates the
+  streaming models; `languageDetection: true` adds `languageCode` to each turn.
+  `forceEndpoint()` ends the current turn now.
+- Apple platforms only: swift-corelibs-foundation on Linux can't open
+  WebSockets.
+
 ## API surface
 
 All paths are under `/v2`.
@@ -191,6 +234,7 @@ All paths are under `/v2`.
 | `getVideo(id:query:)` | `GET /video/{id}` | Poll video job |
 | `transcribeFile(audioFileURL:fields:)` | `POST /transcribe-recorded` | Upload audio |
 | `getTranscribeRecorded(id:query:)` | `GET /transcribe-recorded/{id}` | Poll transcription |
+| `transcribeRealtime(sampleRate:speechModel:encoding:formatTurns:languageDetection:query:)` | WebSocket `/transcribe-realtime` | Real-time transcription session |
 | `toolsGeneralBackgroundRemoval(fields:imageFileURL:)` | `POST /tools/general/background-removal` | Background removal |
 | `toolsPortraitTryOnClothes(fields:files:)` | `POST /tools/portrait/try-on-clothes` | Virtual try-on |
 | `toolsQueryAsyncTaskResult(taskId:)` | `POST /tools/query-async-task-result` | Poll async tool task |
@@ -235,11 +279,13 @@ swift test
 export BITMESH_TEST_API_KEY="bmk_..."
 export BITMESH_TEST_BASE_URL="https://api.bitmesh.ai"   # optional
 export BITMESH_TEST_MODEL="bitmeshai/chat-now-nano"     # optional, for streaming
+export BITMESH_TEST_AUDIO_PCM="clip.pcm"                # optional, 16 kHz 16-bit mono PCM for real-time
 swift test
 ```
 
 The package also builds on Linux (swift-corelibs-foundation), where a streamed
-reply is read whole and then parsed rather than piece by piece.
+reply is read whole and then parsed rather than piece by piece, and real-time
+transcription is not available.
 
 ## Example app
 

@@ -32,8 +32,8 @@ public final class BitmeshClient: @unchecked Sendable {
 
     private let apiKey: String
     private let baseURL: String
-    private let timeoutSeconds: TimeInterval
-    private let session: URLSession
+    let timeoutSeconds: TimeInterval
+    let session: URLSession
     private let appCheckTokenProvider: BitmeshAppCheckTokenProvider?
     private let debugToken: String?
 
@@ -302,7 +302,7 @@ public final class BitmeshClient: @unchecked Sendable {
 
     /// An authenticated request to `{baseURL}/v2/{path}`. Per-call `headers` go
     /// first, so they can't replace the key or the App Check token.
-    private func makeRequest(
+    func makeRequest(
         method: String,
         path: String,
         query: [String: String] = [:],
